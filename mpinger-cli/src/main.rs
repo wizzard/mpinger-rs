@@ -11,7 +11,7 @@ use tprint::{TPrint, TPrintAlign};
 struct Args {
     #[arg(short, long)]
     debug: bool,
-    /// Number of pings to send
+    /// Number of pings to send, 0 for infinite pings (press Ctrl+C to stop)
     #[arg(short, long, default_value = "5")]
     count: usize,
     /// Interval between pings in ms
