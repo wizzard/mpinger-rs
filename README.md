@@ -10,6 +10,26 @@ Supported ping methods:
 
 ## Console client
 
+`mpinger-cli` is a console client:
+
 ```bash
-cargo build --release  && sudo ./target/release/mpinger-cli -c 0 --icmp 1.1.1.1,www.google.com
+Usage: mpinger-cli [OPTIONS]
+Options:
+  -d, --debug
+  -c, --count <COUNT>        Number of pings to send [default: 5]
+  -i, --interval <INTERVAL>  Interval between pings in ms [default: 1000]
+      --icmp <ICMP>          List of comma separated addresses to perform ICMP pings
+      --connect <CONNECT>    List of comma separated addresses to perform TCP connect pings (default port 80)
+      --http <HTTP>          List of comma separated addresses to perform HTTP keepalive pings (default port 80)
+  -h, --help                 Print help
+  ```
+
+Example:
+
+```bash
+sudo ./target/debug/mpinger-cli -c 5 --icmp 1.1.1.1,www.google.com,1.2.3.4 --connect 1.1.1.1,www.google.com --http 1.1.1.1
 ```
+
+![mpinger-cli output](images/mpinger-cli.png)
+
+## TUI client

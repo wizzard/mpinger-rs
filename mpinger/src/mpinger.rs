@@ -1,19 +1,22 @@
-use crate::mpinger_http_keepalive::MPingerHTTPKeepAlive;
-use crate::mpinger_icmp::MPingerICMP;
-use crate::mpinger_rnd::MPingerRnd;
-use crate::mpinger_tcp_connect::MPingerTCPConnect;
+use crate::{
+    mpinger_http_keepalive::MPingerHTTPKeepAlive, mpinger_icmp::MPingerICMP,
+    mpinger_rnd::MPingerRnd, mpinger_tcp_connect::MPingerTCPConnect, utils,
+};
 use anyhow::Result;
-use log::error;
-use std::collections::HashMap;
+use socket2::SockAddr;
+use std::net::IpAddr;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock, mpsc};
+use std::thread;
 
 #[derive(Debug)]
 pub struct MPingerMessage {
-    pub idx: usize,
+    pub destination_id: usize,
+    pub ping_nr: usize,
     pub runner_type: MPingerType,
     pub start_timestamp: i64,
     pub duration: u32,
+    pub is_error: bool,
 }
 impl Iterator for MPingerReader {
     type Item = MPingerMessage;
@@ -38,18 +41,28 @@ impl MPingerReader {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MPingDestination {
+    // unique id
+    pub id: usize,
+    // original address
+    pub address: String,
+    // host part
+    pub host: String,
+    // port part
+    pub port: u16,
+    // resolved ip
+    pub sock_addr: SockAddr,
+    // type
+    pub ping_type: MPingerType,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 pub enum MPingerType {
     ICMPPing,
     TCPConnect,
     HTTPKeepAlive,
     Rnd,
-}
-
-pub trait MPingerRunner {
-    fn add(&mut self, addr: &str);
-    fn start(&self, count: usize) -> Result<()>;
-    fn get_addr_by_idx(&self, idx: usize) -> Option<&String>;
 }
 
 pub type MPingerConfigShared = Arc<RwLock<MPingerConfig>>;
@@ -76,8 +89,11 @@ impl Default for MPingerConfig {
 
 pub struct MPinger {
     config: MPingerConfigShared,
-    runners: HashMap<MPingerType, Box<dyn MPingerRunner>>,
+    // runners: HashMap<MPingerType, MPingerRunnerStruct>,
     rx: Rc<mpsc::Receiver<MPingerMessage>>,
+    tx: mpsc::Sender<MPingerMessage>,
+    total_addresses: usize,
+    destinations: Vec<MPingDestination>,
 }
 
 impl MPinger {
@@ -86,54 +102,47 @@ impl MPinger {
 
         let config = Arc::new(RwLock::new(config));
 
-        let mut runners: HashMap<MPingerType, Box<dyn MPingerRunner>> = HashMap::new();
-        runners.insert(
-            MPingerType::Rnd,
-            Box::new(MPingerRnd::new(Arc::clone(&config), tx.clone())),
-        );
-
-        runners.insert(
-            MPingerType::TCPConnect,
-            Box::new(MPingerTCPConnect::new(config.clone(), tx.clone())),
-        );
-
-        runners.insert(
-            MPingerType::HTTPKeepAlive,
-            Box::new(MPingerHTTPKeepAlive::new(config.clone(), tx.clone())),
-        );
-
-        runners.insert(
-            MPingerType::ICMPPing,
-            Box::new(MPingerICMP::new(config.clone(), tx.clone())),
-        );
-
         let rx = Rc::new(rx);
 
         Self {
             config,
-            runners,
             rx,
+            tx,
+            total_addresses: 0,
+            destinations: Vec::new(),
         }
     }
 
-    // TODO: return ID of the added address
-    pub fn add(&mut self, runner_type: MPingerType, addr: &str) -> &mut Self {
-        if let Some(runner) = self.runners.get_mut(&runner_type) {
-            runner.add(addr);
-        } else {
-            error!("No object found for the given enum variant!");
-        }
+    //try to parse and resolve, add to the appropiate runner
+    pub fn add_destination(&mut self, runner_type: MPingerType, addr: &str) -> Result<usize> {
+        let (ip, port) =
+            match utils::parse_host_port(addr, self.config.read().unwrap().default_port) {
+                Ok((ip, port)) => (ip, port),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(e));
+                }
+            };
 
-        self
+        let sock_addr = SockAddr::from(std::net::SocketAddr::new(IpAddr::V4(ip), port));
+
+        self.total_addresses += 1;
+
+        let dest = MPingDestination {
+            id: self.total_addresses,
+            ping_type: runner_type,
+            address: addr.to_string(),
+            host: ip.to_string(),
+            port,
+            sock_addr,
+        };
+
+        self.destinations.push(dest.clone());
+
+        Ok(self.total_addresses)
     }
 
-    pub fn get_addr_by_idx(&self, runner_type: MPingerType, idx: usize) -> Option<&String> {
-        if let Some(runner) = self.runners.get(&runner_type) {
-            runner.get_addr_by_idx(idx)
-        } else {
-            error!("No object found for the given enum variant!");
-            None
-        }
+    pub fn get_destination_by_id(&self, id: usize) -> Option<&MPingDestination> {
+        self.destinations.iter().find(|&dest| dest.id == id)
     }
 
     pub fn get_runner_description(&self, runner_type: &MPingerType) -> &str {
@@ -156,12 +165,54 @@ impl MPinger {
         self.config.read().unwrap().ping_interval
     }
 
-    pub fn start(&self, count: usize) -> MPingerReader {
-        for runner in self.runners.values() {
-            if let Err(e) = runner.start(count) {
-                error!("Error starting runner: {}", e);
-            }
+    fn ping_runner(
+        config: MPingerConfigShared,
+        destinations: Vec<MPingDestination>,
+        tx: mpsc::Sender<MPingerMessage>,
+        count: usize,
+    ) {
+        // run Connect pings
+        let handles: Vec<_> = destinations
+            .iter()
+            .map(|dest| {
+                let tx = tx.clone();
+                let config = config.clone();
+                let dest = dest.clone();
+
+                match dest.ping_type {
+                    MPingerType::ICMPPing => thread::spawn(move || {
+                        MPingerICMP::start(config.clone(), &dest, tx, count);
+                    }),
+                    MPingerType::TCPConnect => thread::spawn(move || {
+                        MPingerTCPConnect::start(config.clone(), &dest, tx, count);
+                    }),
+                    MPingerType::HTTPKeepAlive => thread::spawn(move || {
+                        MPingerHTTPKeepAlive::start(config.clone(), &dest, tx, count);
+                    }),
+                    MPingerType::Rnd => thread::spawn(move || {
+                        MPingerRnd::start(config.clone(), &dest, tx, count);
+                    }),
+                }
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
         }
+    }
+
+    pub fn start(&self, count: usize) -> MPingerReader {
+        if !self.destinations.is_empty() {
+            let destinations: Vec<MPingDestination> = self.destinations.clone();
+            let tx = self.tx.clone();
+            let config = self.config.clone();
+
+            thread::spawn(move || {
+                MPinger::ping_runner(config, destinations, tx, count);
+            });
+        }
+
         MPingerReader::new(self.config.clone(), self.rx.clone())
     }
 }

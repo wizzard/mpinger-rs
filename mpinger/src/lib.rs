@@ -6,3 +6,4 @@ mod mpinger_tcp_connect;
 mod utils;
 
 pub use crate::mpinger::{MPinger, MPingerConfig, MPingerType};
+pub use crate::utils::RunningAverage;

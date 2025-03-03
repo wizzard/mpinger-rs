@@ -1,12 +1,7 @@
 use std::net::{Ipv4Addr, ToSocketAddrs};
 
-pub fn parse_host_port(
-    host_port: &str,
-    default_port: Option<u16>,
-) -> Result<(Ipv4Addr, u16), String> {
+pub fn parse_host_port(host_port: &str, default_port: u16) -> Result<(Ipv4Addr, u16), String> {
     let parts: Vec<&str> = host_port.split(':').collect();
-
-    let default_port = default_port.unwrap_or(0);
 
     let (host, port) = match parts.len() {
         1 => (parts[0], Some(default_port)),
@@ -33,5 +28,61 @@ pub fn parse_host_port(
     match socket_addr.ip() {
         std::net::IpAddr::V4(ipv4) => Ok((ipv4, port)),
         _ => Err("IPv6 addresses not supported".to_string()),
+    }
+}
+
+pub struct RunningAverage {
+    values: Vec<u32>,
+    capacity: usize,
+    sum: u64,
+    position: usize,
+    count: usize,
+}
+
+impl RunningAverage {
+    pub fn new(capacity: usize) -> Self {
+        if capacity == 0 {
+            panic!("Capacity must be greater than 0");
+        }
+
+        RunningAverage {
+            values: vec![0; capacity],
+            capacity,
+            sum: 0,
+            position: 0,
+            count: 0,
+        }
+    }
+
+    pub fn add(&mut self, value: u32) {
+        if self.count == self.capacity {
+            self.sum = self.sum.saturating_sub(self.values[self.position] as u64);
+        } else {
+            self.count += 1;
+        }
+
+        self.values[self.position] = value;
+        self.sum = self.sum.saturating_add(value as u64);
+
+        self.position = (self.position + 1) % self.capacity;
+    }
+
+    pub fn get(&self) -> Option<f64> {
+        if self.count == 0 {
+            None
+        } else {
+            Some(self.sum as f64 / self.count as f64)
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn clear(&mut self) {
+        self.values.fill(0);
+        self.sum = 0;
+        self.position = 0;
+        self.count = 0;
     }
 }
