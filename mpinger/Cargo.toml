@@ -1,7 +1,14 @@
 [package]
 name = "mpinger"
+description = "MPinger is a versatile multi-host roundtrip time (ping) measure tool that employs a variety of methods to efficiently ping destination hosts"
 version = "1.0.1"
-edition = "2024"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Paul Jonkins <paul.jonkins@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/wizzard/mpinger-rs"
+categories = ["command-line-interface"]
+keywords = ["ping", "cli", "network"]
 
 [dependencies]
 anyhow = "1.0.95"
