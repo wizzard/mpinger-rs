@@ -90,7 +90,7 @@ impl MPingerICMP {
                         ping_nr: i,
                         runner_type: MPingerType::ICMPPing,
                         start_timestamp: OffsetDateTime::now_utc().unix_timestamp(),
-                        duration: rtt.as_millis() as u32,
+                        duration: rtt.as_millis() as u64,
                         is_error: false,
                     });
                     found = true;

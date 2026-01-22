@@ -1,5 +1,5 @@
 [package]
-name = "mpinger"
+name = "mpinger-srv"
 description = "MPinger is a versatile multi-host roundtrip time (ping) measure tool that employs a variety of methods to efficiently ping destination hosts"
 version = "1.0.1"
 edition = "2021"
@@ -11,9 +11,12 @@ categories = ["command-line-interface"]
 keywords = ["ping", "cli", "network"]
 
 [dependencies]
-anyhow = "1.0.95"
-env_logger = "0.11.6"
-log = "0.4.26"
-rand = "0.9.0"
-socket2 = { version = "0.5.8", features = ["all"] }
-time = { version = "0.3.37", features = ["formatting"] }
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.5.1"
+env_logger = "0.11.8"
+log = "0.4.29"
+mpinger = { path = "../mpinger-lib" }
+time = "0.3.45"
+tokio = { version = "1", features = ["full"] }
+tprint = "1.0.1"

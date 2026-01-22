@@ -39,7 +39,7 @@ impl MPingerTCPConnect {
 
             let start_time = Instant::now();
             let result = socket.connect_timeout(&dest.sock_addr, timeout);
-            let duration = start_time.elapsed().as_millis() as u32;
+            let duration = start_time.elapsed().as_micros() as u32;
 
             let duration = match result {
                 Ok(_) => duration,
@@ -54,7 +54,7 @@ impl MPingerTCPConnect {
                 ping_nr: i,
                 runner_type: MPingerType::TCPConnect,
                 start_timestamp: OffsetDateTime::now_utc().unix_timestamp(),
-                duration,
+                duration: duration as u64,
                 is_error: false,
             });
             if result.is_err() {

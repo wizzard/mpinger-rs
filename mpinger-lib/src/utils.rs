@@ -32,7 +32,7 @@ pub fn parse_host_port(host_port: &str, default_port: u16) -> Result<(Ipv4Addr, 
 }
 
 pub struct RunningAverage {
-    values: Vec<u32>,
+    values: Vec<u64>,
     capacity: usize,
     sum: u64,
     position: usize,
@@ -54,15 +54,15 @@ impl RunningAverage {
         }
     }
 
-    pub fn add(&mut self, value: u32) {
+    pub fn add(&mut self, value: u64) {
         if self.count == self.capacity {
-            self.sum = self.sum.saturating_sub(self.values[self.position] as u64);
+            self.sum = self.sum.saturating_sub(self.values[self.position]);
         } else {
             self.count += 1;
         }
 
         self.values[self.position] = value;
-        self.sum = self.sum.saturating_add(value as u64);
+        self.sum = self.sum.saturating_add(value);
 
         self.position = (self.position + 1) % self.capacity;
     }

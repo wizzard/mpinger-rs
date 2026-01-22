@@ -113,7 +113,7 @@ impl MPingerHTTPKeepAlive {
                 ping_nr: i,
                 runner_type: MPingerType::HTTPKeepAlive,
                 start_timestamp: OffsetDateTime::now_utc().unix_timestamp(),
-                duration,
+                duration: duration as u64,
                 is_error: false,
             });
             if result.is_err() {

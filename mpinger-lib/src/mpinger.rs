@@ -1,21 +1,23 @@
 use crate::{
     mpinger_http_keepalive::MPingerHTTPKeepAlive, mpinger_icmp::MPingerICMP,
-    mpinger_rnd::MPingerRnd, mpinger_tcp_connect::MPingerTCPConnect, utils,
+    mpinger_rnd::MPingerRnd, mpinger_tcp_connect::MPingerTCPConnect, mpinger_udp::MPingerUDP,
+    utils,
 };
 use anyhow::Result;
 use socket2::SockAddr;
 use std::net::IpAddr;
-use std::rc::Rc;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
+use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MPingerMessage {
     pub destination_id: usize,
     pub ping_nr: usize,
     pub runner_type: MPingerType,
     pub start_timestamp: i64,
-    pub duration: u32,
+    pub duration: u64,
     pub is_error: bool,
 }
 impl Iterator for MPingerReader {
@@ -23,21 +25,38 @@ impl Iterator for MPingerReader {
 
     fn next(&mut self) -> Option<Self::Item> {
         let timeout = std::time::Duration::from_millis(self.config.read().unwrap().next_timeout);
-        match self.rx.recv_timeout(timeout) {
-            Ok(data) => Some(data),
-            Err(_) => None,
-        }
+        self.recv_timeout(timeout).ok()
     }
 }
 
+#[derive(Debug)]
 pub struct MPingerReader {
     config: MPingerConfigShared,
-    rx: Rc<mpsc::Receiver<MPingerMessage>>,
+    rx: Arc<Mutex<Receiver<MPingerMessage>>>,
 }
 
 impl MPingerReader {
-    pub fn new(config: MPingerConfigShared, rx: Rc<mpsc::Receiver<MPingerMessage>>) -> Self {
+    pub fn new(config: MPingerConfigShared, rx: Arc<Mutex<Receiver<MPingerMessage>>>) -> Self {
         Self { config, rx }
+    }
+
+    pub fn get_rx(&self) -> Arc<Mutex<Receiver<MPingerMessage>>> {
+        self.rx.clone()
+    }
+
+    pub fn recv(&self) -> Result<MPingerMessage, std::sync::mpsc::RecvError> {
+        self.rx.lock().unwrap().recv()
+    }
+
+    pub fn try_recv(&self) -> Result<MPingerMessage, std::sync::mpsc::TryRecvError> {
+        self.rx.lock().unwrap().try_recv()
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<MPingerMessage, std::sync::mpsc::RecvTimeoutError> {
+        self.rx.lock().unwrap().recv_timeout(timeout)
     }
 }
 
@@ -62,6 +81,7 @@ pub enum MPingerType {
     ICMPPing,
     TCPConnect,
     HTTPKeepAlive,
+    UDPPing,
     Rnd,
 }
 
@@ -87,10 +107,11 @@ impl Default for MPingerConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct MPinger {
     config: MPingerConfigShared,
     // runners: HashMap<MPingerType, MPingerRunnerStruct>,
-    rx: Rc<mpsc::Receiver<MPingerMessage>>,
+    rx: Arc<Mutex<Receiver<MPingerMessage>>>,
     tx: mpsc::Sender<MPingerMessage>,
     total_addresses: usize,
     destinations: Vec<MPingDestination>,
@@ -102,7 +123,7 @@ impl MPinger {
 
         let config = Arc::new(RwLock::new(config));
 
-        let rx = Rc::new(rx);
+        let rx = Arc::new(Mutex::new(rx));
 
         Self {
             config,
@@ -115,13 +136,17 @@ impl MPinger {
 
     //try to parse and resolve, add to the appropiate runner
     pub fn add_destination(&mut self, runner_type: MPingerType, addr: &str) -> Result<usize> {
-        let (ip, port) =
-            match utils::parse_host_port(addr, self.config.read().unwrap().default_port) {
-                Ok((ip, port)) => (ip, port),
-                Err(e) => {
-                    return Err(anyhow::anyhow!(e));
-                }
-            };
+        let default_port = match runner_type {
+            MPingerType::UDPPing => 8888,
+            _ => self.config.read().unwrap().default_port,
+        };
+
+        let (ip, port) = match utils::parse_host_port(addr, default_port) {
+            Ok((ip, port)) => (ip, port),
+            Err(e) => {
+                return Err(anyhow::anyhow!(e));
+            }
+        };
 
         let sock_addr = SockAddr::from(std::net::SocketAddr::new(IpAddr::V4(ip), port));
 
@@ -150,6 +175,7 @@ impl MPinger {
             MPingerType::ICMPPing => "ICMP ping",
             MPingerType::TCPConnect => "TCP Connect",
             MPingerType::HTTPKeepAlive => "HTTP Keep Alive",
+            MPingerType::UDPPing => "UDP ping",
             MPingerType::Rnd => "Random",
         }
     }
@@ -188,6 +214,9 @@ impl MPinger {
                     }),
                     MPingerType::HTTPKeepAlive => thread::spawn(move || {
                         MPingerHTTPKeepAlive::start(config.clone(), &dest, tx, count);
+                    }),
+                    MPingerType::UDPPing => thread::spawn(move || {
+                        MPingerUDP::start(config.clone(), &dest, tx, count);
                     }),
                     MPingerType::Rnd => thread::spawn(move || {
                         MPingerRnd::start(config.clone(), &dest, tx, count);

@@ -26,6 +26,9 @@ struct Args {
     /// List of comma separated addresses to perform HTTP keepalive pings (default port 80)
     #[arg(long)]
     http: Option<String>,
+    /// List of comma separated addresses to perform UDP pings (default port 8888)
+    #[arg(long)]
+    udp: Option<String>,
 }
 
 struct PingStats {
@@ -34,9 +37,18 @@ struct PingStats {
     ping_type: String,
     count: usize,
     timeouts: usize,
-    min_ping: Option<u32>,
-    max_ping: Option<u32>,
+    min_ping: Option<u64>,
+    max_ping: Option<u64>,
     avg_ping: RunningAverage,
+}
+
+// Format duration in milliseconds
+fn format_duration_u64(duration: u64) -> String {
+    format!("{:.2} ms", duration as f64 / 1_000.0)
+}
+
+fn format_duration_f64(duration: f64) -> String {
+    format!("{:.2} ms", duration / 1_000.0)
 }
 
 fn print_stats(ping_stats: &[PingStats]) {
@@ -55,9 +67,9 @@ fn print_stats(ping_stats: &[PingStats]) {
             .add_data(&ping_stat.ping_type)
             .add_data(ping_stat.count)
             .add_data(ping_stat.timeouts)
-            .add_data(ping_stat.min_ping.unwrap_or(0))
-            .add_data(ping_stat.max_ping.unwrap_or(0))
-            .add_data(ping_stat.avg_ping.get().unwrap_or(0.0));
+            .add_data(format_duration_u64(ping_stat.min_ping.unwrap_or(0)))
+            .add_data(format_duration_u64(ping_stat.max_ping.unwrap_or(0)))
+            .add_data(format_duration_f64(ping_stat.avg_ping.get().unwrap_or(0.0)));
     }
     tp.print().unwrap();
 }
@@ -146,6 +158,25 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(udp) = args.udp {
+        let udp_addresses: Vec<&str> = udp.split(',').collect();
+        for address in udp_addresses {
+            let id = ping_cli.add_destination(MPingerType::UDPPing, address)?;
+
+            ping_stats.push(PingStats {
+                idx: id,
+                label: address.to_string(),
+                ping_type: "UDP".to_string(),
+                count: 0,
+                timeouts: 0,
+                min_ping: None,
+                max_ping: None,
+                avg_ping: RunningAverage::new(MAX_AVG_PINGS),
+            });
+            total_addresses += 1;
+        }
+    }
+
     if total_addresses == 0 {
         error!("No addresses to ping!");
         return Ok(());
@@ -163,10 +194,29 @@ fn main() -> Result<()> {
     .expect("Error setting Ctrl+C handler");
 
     let pinger_reader = ping_cli.start(args.count);
-    for ping_message in pinger_reader {
-        if ping_message.is_error {
-            continue;
+
+    /*
+    let rx = pinger_reader.get_rx();
+    let mut iter = rx.try_iter();
+    loop {
+        loop {
+            let val = iter.next();
+            if val.is_none() {
+                println!("No more values");
+                break;
+            }
+            let ping_message = val.unwrap();
+            if ping_message.is_error {
+                continue;
+            }
+            println!("Ping message: {:?}", ping_message);
         }
+        println!("Sleeping for 5 second");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+    */
+
+    for ping_message in pinger_reader {
         let date: OffsetDateTime =
             OffsetDateTime::from_unix_timestamp(ping_message.start_timestamp)?;
         let format = format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")?;
@@ -191,7 +241,7 @@ fn main() -> Result<()> {
         {
             stat.count += 1;
 
-            if ping_message.duration == 0 {
+            if ping_message.is_error || ping_message.duration == 0 {
                 stat.timeouts += 1;
             } else {
                 stat.avg_ping.add(ping_message.duration);

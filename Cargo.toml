@@ -1,3 +1,8 @@
 [workspace]
+members = [
+    "mpinger-lib",
+    "mpinger-cli",
+#    "mpinger-tui",
+    "mpinger-srv",
+]
 resolver = "3"
-members = ["mpinger-cli", "mpinger"]
